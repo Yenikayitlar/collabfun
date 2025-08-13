@@ -1,7 +1,7 @@
 # collabfun
 trustless collaborative token launch
 
-a fully trustless smart contract on BNB Chain for two untrusting parties to collaboratively launch a BEP-20 memecoin. 
+a fully trustless smart contract on a Chain for two untrusting parties to collaboratively launch a BEP-20 memecoin. 
 
 Requirement:
 
