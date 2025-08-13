@@ -20,11 +20,15 @@ describe("TokenLaunch", () => {
     const PancakeRouterMock = await ethers.getContractFactory("PancakeRouterMock");
     pancakeRouterMock = await PancakeRouterMock.deploy();
 
+    // Mock Safe with IERC165
+    const SafeMock = await ethers.getContractFactory("SafeMock");
+    const safeMock = await SafeMock.deploy();
+
     TokenLaunch = await ethers.getContractFactory("TokenLaunch");
     tokenLaunch = await TokenLaunch.deploy(
       partyA.address,
       partyB.address,
-      safeWallet.address,
+      safeMock.address,
       pancakeRouterMock.address,
       depositAmount,
       liquidityBNB,
@@ -37,12 +41,15 @@ describe("TokenLaunch", () => {
     );
   });
 
-  it("Should deploy with correct parameters", async () => {
+  it("Should deploy with correct parameters and emit ContractDeployed", async () => {
     expect(await tokenLaunch.partyA()).to.equal(partyA.address);
     expect(await tokenLaunch.depositAmount()).to.equal(depositAmount);
     expect(await tokenLaunch.getLaunchState()).to.equal(0); // Initialized
     expect(await tokenLaunch.getStateName()).to.equal("Initialized");
     expect(await tokenLaunch.paused()).to.be.false;
+    expect(await tokenLaunch.getPancakeRouter()).to.equal(pancakeRouterMock.address);
+    await expect(tokenLaunch.deployTransaction).to.emit(tokenLaunch, "ContractDeployed")
+      .withArgs(partyA.address, partyB.address, await tokenLaunch.safeWallet(), pancakeRouterMock.address);
   });
 
   it("Should allow deposits and transition state", async () => {
@@ -71,6 +78,16 @@ describe("TokenLaunch", () => {
     expect(uri).to.equal("https://logo.uri");
   });
 
+  it("Should update metadata URI", async () => {
+    await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
+    await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
+    await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
+    await expect(tokenLaunch.connect(safeWallet).setMetadataURI("https://new.logo.uri"))
+      .to.emit(tokenLaunch, "MetadataUpdated").withArgs("https://new.logo.uri");
+    const [, , uri] = await tokenLaunch.getMetadata();
+    expect(uri).to.equal("https://new.logo.uri");
+  });
+
   it("Should add liquidity and transfer remaining", async () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
@@ -89,10 +106,10 @@ describe("TokenLaunch", () => {
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
     await tokenLaunch.connect(partyA).addLiquidity();
-    // Mock Safe allowance (not testable on-chain, assume pre-approved)
+    const lpBalance = await tokenLaunch.getSafeLPBalance(pancakeRouterMock.address);
     const tx = await tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 365 * 24 * 3600);
-    await expect(tx).to.emit(tokenLaunch, "LPLockInitiated");
-    await expect(tx).to.emit(tokenLaunch, "LPLocked");
+    await expect(tx).to.emit(tokenLaunch, "LPLockInitiated").withArgs(pancakeRouterMock.address, lpLockerMock.address, lpBalance, 365 * 24 * 3600);
+    await expect(tx).to.emit(tokenLaunch, "LPLocked").withArgs(pancakeRouterMock.address, lpLockerMock.address, lpBalance, 365 * 24 * 3600);
     expect(await tokenLaunch.getLaunchState()).to.equal(4); // LPLocked
     expect(await tokenLaunch.getStateName()).to.equal("LPLocked");
     expect(await tokenLaunch.getSafeLPBalance(pancakeRouterMock.address)).to.be.greaterThan(0); // Mock test
@@ -151,6 +168,15 @@ contract PancakeRouterMock {
         uint256 deadline
     ) external payable returns (uint256 amountToken, uint256 amountETH, uint256 liquidity) {
         return (amountTokenDesired, msg.value, 1000);
+    }
+}
+`;
+
+// Mock Safe with IERC165
+const SafeMock = `
+contract SafeMock {
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == 0x01ffc9a7; // IERC165
     }
 }
 `;
