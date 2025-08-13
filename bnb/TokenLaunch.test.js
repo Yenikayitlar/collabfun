@@ -35,6 +35,7 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.partyA()).to.equal(partyA.address);
     expect(await tokenLaunch.depositAmount()).to.equal(depositAmount);
     expect(await tokenLaunch.getLaunchState()).to.equal(0); // Initialized
+    expect(await tokenLaunch.paused()).to.be.false;
   });
 
   it("Should allow deposits and transition state", async () => {
@@ -42,16 +43,23 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.partyADeposited()).to.be.true;
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     expect(await tokenLaunch.getLaunchState()).to.equal(1); // Deposited
+    await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Party A deposited");
   });
 
   it("Should create token and emit events", async () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
-    await expect(tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri"))
-      .to.emit(tokenLaunch, "TokenCreated")
-      .to.emit(tokenLaunch, "MetadataSet");
-    expect(await tokenLaunch.tokenAddress()).to.not.equal(ethers.constants.AddressZero);
+    const tx = await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
+    await expect(tx).to.emit(tokenLaunch, "TokenCreated").withArgs(
+      await tokenLaunch.tokenAddress(),
+      "GrokDog Coin",
+      "GROKDOG",
+      "https://logo.uri"
+    );
     expect(await tokenLaunch.getLaunchState()).to.equal(2); // TokenCreated
+    const [name, symbol, uri] = await tokenLaunch.getMetadata();
+    expect(name).to.equal("GrokDog Coin");
+    expect(uri).to.equal("https://logo.uri");
   });
 
   it("Should add liquidity and transfer remaining", async () => {
@@ -71,6 +79,7 @@ describe("TokenLaunch", () => {
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
     await tokenLaunch.connect(partyA).addLiquidity();
+    // Mock Safe approval (not testable here)
     await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLocker.address, 365 * 24 * 3600))
       .to.emit(tokenLaunch, "LPLocked");
     expect(await tokenLaunch.getLaunchState()).to.equal(4); // LPLocked
@@ -94,15 +103,30 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.getLaunchState()).to.equal(1); // Deposited
   });
 
+  it("Should handle pause/unpause", async () => {
+    await expect(tokenLaunch.connect(partyA).pause()).to.emit(tokenLaunch, "Paused");
+    await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Contract paused");
+    await expect(tokenLaunch.connect(safeWallet).unpause()).to.emit(tokenLaunch, "Unpaused");
+    await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
+    expect(await tokenLaunch.partyADeposited()).to.be.true;
+  });
+
+  it("Should handle emergency withdraw", async () => {
+    await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
+    await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
+    await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
+    await expect(tokenLaunch.connect(partyA).emergencyWithdraw())
+      .to.emit(tokenLaunch, "EmergencyWithdrawn");
+  });
+
   it("Should revert on invalid actions", async () => {
     await expect(tokenLaunch.connect(partyA).createToken("Name", "Sym", "URI")).to.be.revertedWith("Invalid state");
-    await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
-    await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Party A deposited");
-    await expect(tokenLaunch.connect(partyA).emergencyWithdraw()).to.be.revertedWith("Invalid state");
+    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLocker.address, 1))
+      .to.be.revertedWith("Invalid state");
   });
 });
 
-// Mock PancakeRouter for testing
+// Mock PancakeRouter
 const PancakeRouterMock = `
 contract PancakeRouterMock {
     function addLiquidityETH(
