@@ -23,6 +23,7 @@ contract Memecoin is ERC20, Ownable {
     constructor(string memory name_, string memory symbol_, uint256 totalSupply_)
         ERC20(name_, symbol_)
     {
+        // Supply is scaled (e.g., 1_000_000_000 * 10^18 for 1B tokens with 18 decimals)
         _mint(msg.sender, totalSupply_);
     }
 
@@ -47,7 +48,7 @@ contract TokenLaunch is ReentrancyGuard {
     uint256 public immutable liquidityBNB; // e.g., 0.2 BNB
     uint256 public immutable liquidityTokens; // e.g., 100M tokens
     uint256 public immutable totalSupply; // e.g., 1B tokens
-    uint256 public immutable slippageBps; // e.g., 100 = 1%
+    uint256 public immutable slippageBps; // e.g., 100 = 1%, max 500 = 5%
     uint256 public constant DEPOSIT_DEADLINE = 1 hours;
     uint256 public constant REFUND_DELAY = 1 days;
     uint256 public constant LIQUIDITY_DEADLINE = 1 days;
@@ -55,23 +56,28 @@ contract TokenLaunch is ReentrancyGuard {
     // State
     enum LaunchState { Initialized, Deposited, TokenCreated, LiquidityAdded, LPLocked }
     LaunchState public state;
+    bool public paused;
     bool public partyADeposited;
     bool public partyBDeposited;
     address public tokenAddress;
+    string public tokenName;
+    string public tokenSymbol;
     string public logoURI;
     uint256 public deploymentTime;
     uint256 public tokenCreationTime;
 
     // Events
     event Deposited(address indexed party, uint256 amount);
-    event TokenCreated(address indexed token, string name, string symbol);
-    event MetadataSet(string name, string symbol, string logoURI);
+    event TokenCreated(address indexed token, string name, string symbol, string logoURI);
     event LiquidityAdded(uint256 tokenAmount, uint256 bnbAmount, uint256 liquidityReceived);
     event RemainingTransferred(uint256 tokenAmount, uint256 bnbAmount);
     event LPLocked(address indexed locker, uint256 duration);
     event Refunded(address indexed party, uint256 amount);
     event EmergencyWithdrawn(uint256 bnbAmount, uint256 tokenAmount);
     event LiquidityReset();
+    event StateChanged(LaunchState state);
+    event Paused();
+    event Unpaused();
 
     modifier onlyParties() {
         require(msg.sender == partyA || msg.sender == partyB, "Only parties");
@@ -80,6 +86,11 @@ contract TokenLaunch is ReentrancyGuard {
 
     modifier atState(LaunchState _state) {
         require(state == _state, "Invalid state");
+        _;
+    }
+
+    modifier whenNotPaused() {
+        require(!paused, "Contract paused");
         _;
     }
 
@@ -97,7 +108,7 @@ contract TokenLaunch is ReentrancyGuard {
         require(_partyA != address(0) && _partyB != address(0) && _safeWallet != address(0) && _pancakeRouter != address(0), "Zero address");
         require(_partyA != _partyB, "Parties must differ");
         require(_depositAmount >= _liquidityBNB && _liquidityTokens <= _totalSupply, "Invalid amounts");
-        require(_slippageBps <= 1000, "Slippage too high"); // Max 10%
+        require(_slippageBps <= 500, "Slippage too high"); // Max 5%
         partyA = _partyA;
         partyB = _partyB;
         safeWallet = _safeWallet;
@@ -109,10 +120,11 @@ contract TokenLaunch is ReentrancyGuard {
         slippageBps = _slippageBps;
         deploymentTime = block.timestamp;
         state = LaunchState.Initialized;
+        emit StateChanged(state);
     }
 
     // Deposit BNB
-    function deposit() external payable onlyParties atState(LaunchState.Initialized) {
+    function deposit() external payable onlyParties atState(LaunchState.Initialized) whenNotPaused {
         require(block.timestamp <= deploymentTime + DEPOSIT_DEADLINE, "Deposit deadline passed");
         require(msg.value == depositAmount, "Incorrect deposit");
         if (msg.sender == partyA) {
@@ -124,6 +136,7 @@ contract TokenLaunch is ReentrancyGuard {
         }
         if (partyADeposited && partyBDeposited) {
             state = LaunchState.Deposited;
+            emit StateChanged(state);
         }
         emit Deposited(msg.sender, msg.value);
     }
@@ -133,22 +146,25 @@ contract TokenLaunch is ReentrancyGuard {
         external
         onlyParties
         atState(LaunchState.Deposited)
+        whenNotPaused
     {
         require(tokenAddress == address(0), "Token created");
         Memecoin token = new Memecoin(name, symbol, totalSupply);
         tokenAddress = address(token);
+        tokenName = name;
+        tokenSymbol = symbol;
         logoURI = _logoURI;
         tokenCreationTime = block.timestamp;
         state = LaunchState.TokenCreated;
-        emit TokenCreated(tokenAddress, name, symbol);
-        emit MetadataSet(name, symbol, _logoURI);
+        emit StateChanged(state);
+        emit TokenCreated(tokenAddress, name, symbol, _logoURI);
     }
 
     // Add liquidity
-    function addLiquidity() external onlyParties atState(LaunchState.TokenCreated) nonReentrant {
+    function addLiquidity() external onlyParties atState(LaunchState.TokenCreated) nonReentrant whenNotPaused {
         require(block.timestamp <= tokenCreationTime + LIQUIDITY_DEADLINE, "Liquidity deadline passed");
         require(IERC20(tokenAddress).balanceOf(address(this)) >= liquidityTokens, "Insufficient tokens");
-        SafeERC20.safeApprove(IERC20(tokenAddress), pancakeRouter, 0); // Reset approval
+        SafeERC20.safeApprove(IERC20(tokenAddress), pancakeRouter, 0);
         SafeERC20.safeApprove(IERC20(tokenAddress), pancakeRouter, liquidityTokens);
         (uint256 amountToken, uint256 amountETH, uint256 liquidity) = IPancakeRouter(pancakeRouter).addLiquidityETH{value: liquidityBNB}(
             tokenAddress,
@@ -161,6 +177,7 @@ contract TokenLaunch is ReentrancyGuard {
         require(liquidity > 0, "Liquidity addition failed");
         Memecoin(tokenAddress).renounceOwnership();
         state = LaunchState.LiquidityAdded;
+        emit StateChanged(state);
         emit LiquidityAdded(amountToken, amountETH, liquidity);
 
         // Transfer remaining
@@ -176,19 +193,21 @@ contract TokenLaunch is ReentrancyGuard {
         external
         onlyParties
         atState(LaunchState.LiquidityAdded)
+        whenNotPaused
     {
+        // Safe must approve LP token transfer to locker via its UI (e.g., Team Finance)
         require(locker != address(0), "Invalid locker");
         require(duration > 0, "Invalid duration");
-        // Safe must approve transfer to locker via its UI first
         uint256 lpBalance = IERC20(lpToken).balanceOf(safeWallet);
         require(lpBalance > 0, "No LP tokens in Safe");
-        // Assume Safe executes transfer via batch transaction
+        require(IERC20(lpToken).allowance(safeWallet, locker) >= lpBalance, "Safe must approve locker");
         state = LaunchState.LPLocked;
+        emit StateChanged(state);
         emit LPLocked(locker, duration);
     }
 
     // Refund
-    function refund() external onlyParties atState(LaunchState.Initialized) {
+    function refund() external onlyParties atState(LaunchState.Initialized) whenNotPaused {
         require(block.timestamp > deploymentTime + REFUND_DELAY, "Too early");
         if (msg.sender == partyA && !partyBDeposited) {
             payable(partyA).transfer(depositAmount);
@@ -200,19 +219,37 @@ contract TokenLaunch is ReentrancyGuard {
     }
 
     // Reset if liquidity fails
-    function resetLiquidity() external onlyParties atState(LaunchState.TokenCreated) {
+    function resetLiquidity() external onlyParties atState(LaunchState.TokenCreated) whenNotPaused {
         require(block.timestamp > tokenCreationTime + LIQUIDITY_DEADLINE, "Too early");
+        require(IERC20(tokenAddress).balanceOf(address(this)) >= totalSupply, "Tokens moved");
         state = LaunchState.Deposited;
+        emit StateChanged(state);
         emit LiquidityReset();
     }
 
     // Emergency withdraw
-    function emergencyWithdraw() external onlyParties atState(LaunchState.LiquidityAdded) {
+    function emergencyWithdraw() external onlyParties whenNotPaused {
+        require(state >= LaunchState.TokenCreated, "No assets to withdraw");
         uint256 tokenBalance = IERC20(tokenAddress).balanceOf(address(this));
         uint256 bnbBalance = address(this).balance;
         if (tokenBalance > 0) SafeERC20.safeTransfer(IERC20(tokenAddress), safeWallet, tokenBalance);
         if (bnbBalance > 0) payable(safeWallet).transfer(bnbBalance);
         emit EmergencyWithdrawn(bnbBalance, tokenBalance);
+    }
+
+    // Pause contract
+    function pause() external onlyParties {
+        require(!paused, "Already paused");
+        paused = true;
+        emit Paused();
+    }
+
+    // Unpause contract (via Safe)
+    function unpause() external {
+        require(msg.sender == safeWallet, "Only Safe");
+        require(paused, "Not paused");
+        paused = false;
+        emit Unpaused();
     }
 
     // View functions
@@ -222,6 +259,10 @@ contract TokenLaunch is ReentrancyGuard {
 
     function getBalances() external view returns (uint256 bnbBalance, uint256 tokenBalance) {
         return (address(this).balance, tokenAddress == address(0) ? 0 : IERC20(tokenAddress).balanceOf(address(this)));
+    }
+
+    function getMetadata() external view returns (string memory name, string memory symbol, string memory uri) {
+        return (tokenName, tokenSymbol, logoURI);
     }
 
     receive() external payable {}
