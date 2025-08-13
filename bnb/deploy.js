@@ -5,7 +5,7 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   console.log("Deploying from:", deployer.address);
 
-  // Setup Gnosis Safe (2/2) at safe.global first
+  // Deploy Gnosis Safe (2/2) at safe.global first with partyA and partyB as owners
   const partyA = "0xYourPartyAAddress";
   const partyB = "0xYourPartyBAddress";
   const safeWallet = "0xYourGnosisSafeAddress"; // Pre-deployed 2/2 Safe
