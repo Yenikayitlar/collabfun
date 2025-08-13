@@ -9,6 +9,9 @@ describe("TokenLaunch", () => {
   const liquidityTokens = ethers.utils.parseEther("100000000");
   const totalSupply = ethers.utils.parseEther("1000000000");
   const slippageBps = 100; // 1%
+  const depositDeadline = 3600; // 1 hour
+  const refundDelay = 86400; // 1 day
+  const liquidityDeadline = 86400; // 1 day
 
   beforeEach(async () => {
     [partyA, partyB, safeWallet, lpLockerMock] = await ethers.getSigners();
@@ -27,7 +30,10 @@ describe("TokenLaunch", () => {
       liquidityBNB,
       liquidityTokens,
       totalSupply,
-      slippageBps
+      slippageBps,
+      depositDeadline,
+      refundDelay,
+      liquidityDeadline
     );
   });
 
@@ -43,6 +49,7 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.partyADeposited()).to.be.true;
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     expect(await tokenLaunch.getLaunchState()).to.equal(1); // Deposited
+    expect(await tokenLaunch.getStateName()).to.equal("Deposited");
     await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Party A deposited");
   });
 
@@ -57,6 +64,7 @@ describe("TokenLaunch", () => {
       "https://logo.uri"
     );
     expect(await tokenLaunch.getLaunchState()).to.equal(2); // TokenCreated
+    expect(await tokenLaunch.getStateName()).to.equal("TokenCreated");
     const [name, symbol, uri] = await tokenLaunch.getMetadata();
     expect(name).to.equal("GrokDog Coin");
     expect(uri).to.equal("https://logo.uri");
@@ -72,6 +80,7 @@ describe("TokenLaunch", () => {
     const token = await ethers.getContractAt("Memecoin", await tokenLaunch.tokenAddress());
     expect(await token.owner()).to.equal(ethers.constants.AddressZero);
     expect(await tokenLaunch.getLaunchState()).to.equal(3); // LiquidityAdded
+    expect(await tokenLaunch.getStateName()).to.equal("LiquidityAdded");
   });
 
   it("Should lock LP tokens", async () => {
@@ -83,7 +92,9 @@ describe("TokenLaunch", () => {
     await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 365 * 24 * 3600))
       .to.emit(tokenLaunch, "LPLocked");
     expect(await tokenLaunch.getLaunchState()).to.equal(4); // LPLocked
+    expect(await tokenLaunch.getStateName()).to.equal("LPLocked");
     expect(await tokenLaunch.getSafeAllowance(pancakeRouterMock.address, lpLockerMock.address)).to.be.greaterThan(0); // Mock test
+    expect(await tokenLaunch.getSafeLPBalance(pancakeRouterMock.address)).to.be.greaterThan(0); // Mock test
   });
 
   it("Should refund if one party doesn't deposit", async () => {
