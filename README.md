@@ -24,3 +24,13 @@ Add DEXTools Socials + Banner: Add  token information on DEXTools profile with a
 Revoke Freeze Authority: No one will be able to freeze holders' token accounts anymore
 Revoke Mint Authority: No one will be able to create more tokens anymore
 Revoke Update Authority: No one will be able to modify token metadata anymore
+
+Safe Setup: Deploy a 2/2 Gnosis Safe at safe.global before contract deployment. Verify both parties are owners with 2/2 threshold.
+LP Locking: Use Team Finance or a trusted locker for lockLP. The Safe must approve LP token transfers via its UI (propose/approve batch transaction).
+Gas Estimate: ~0.02 BNB ($10) for deployment, ~0.01 BNB ($5) for token creation, ~0.01 BNB ($5) for liquidity, plus 0.2 BNB ($100) for pool = ~0.24 BNB ($120), within $240.
+User Guide: Non-technical users interact via Gnosis Safe’s UI:
+
+Party A proposes deposit, party B approves.
+Party A proposes createToken, party B approves.
+Party A proposes addLiquidity, party B approves.
+Party A proposes lockLP, party B approves (after Safe approves locker).
