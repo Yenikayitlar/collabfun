@@ -1,6 +1,6 @@
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts@5.0.0/token/ERC20/ERC20.sol"; // Updated to 5.0.0
+import "@openzeppelin/contracts@5.0.0/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts@5.0.0/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts@5.0.0/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts@5.0.0/access/Ownable.sol";
@@ -36,6 +36,11 @@ contract Memecoin is ERC20, Ownable {
     }
 }
 
+/// @title TokenLaunch - Trustless memecoin launch contract for BNB Chain
+/// @dev Deploy on BNB Chain (chainId 56). Compatible with PancakeSwap V2; consider V3 for concentrated liquidity in future.
+/// @dev Use UUPS proxy for upgradeability if needed (not implemented here).
+/// @dev Metadata stored on-chain; consider IPFS for gas savings in future versions.
+/// @custom:security-contact security@x.ai
 contract TokenLaunch is ReentrancyGuard {
     // Immutable parties and configs
     address public immutable partyA;
@@ -49,9 +54,9 @@ contract TokenLaunch is ReentrancyGuard {
     uint256 public immutable liquidityTokens; // e.g., 100M tokens
     uint256 public immutable totalSupply; // e.g., 1B tokens
     uint256 public immutable slippageBps; // e.g., 100 = 1%, max 500 = 5%
-    uint256 public immutable depositDeadline; // Configurable, e.g., 1 hours
-    uint256 public immutable refundDelay; // Configurable, e.g., 1 days
-    uint256 public immutable liquidityDeadline; // Configurable, e.g., 1 days
+    uint256 public immutable depositDeadline; // e.g., 1 hour
+    uint256 public immutable refundDelay; // e.g., 1 day
+    uint256 public immutable liquidityDeadline; // e.g., 1 day
 
     // State
     enum LaunchState { Initialized, Deposited, TokenCreated, LiquidityAdded, LPLocked }
@@ -71,6 +76,7 @@ contract TokenLaunch is ReentrancyGuard {
     event TokenCreated(address indexed token, string name, string symbol, string logoURI);
     event LiquidityAdded(uint256 tokenAmount, uint256 bnbAmount, uint256 liquidityReceived);
     event RemainingTransferred(uint256 tokenAmount, uint256 bnbAmount);
+    event LPLockInitiated(address indexed lpToken, address indexed locker, uint256 amount, uint256 duration);
     event LPLocked(address indexed locker, uint256 duration);
     event Refunded(address indexed party, uint256 amount);
     event EmergencyWithdrawn(uint256 bnbAmount, uint256 tokenAmount);
@@ -94,8 +100,10 @@ contract TokenLaunch is ReentrancyGuard {
         _;
     }
 
-    /// @dev Formal invariant: total tokens in contract <= totalSupply (verified with tools like Isabelle)
+    /// @dev Formal invariant: totalSupply >= IERC20(tokenAddress).balanceOf(address(this))
     /// @dev Formal invariant: state transitions only forward (Initialized -> Deposited -> TokenCreated -> LiquidityAdded -> LPLocked)
+    /// @dev Formal property: address(this).balance >= depositAmount if state == Deposited
+    /// @dev Formal property: safeWallet has 2/2 threshold (verified off-chain)
     constructor(
         address _partyA,
         address _partyB,
@@ -115,6 +123,10 @@ contract TokenLaunch is ReentrancyGuard {
         require(_depositAmount >= _liquidityBNB && _liquidityTokens <= _totalSupply, "Invalid amounts");
         require(_slippageBps <= 500, "Slippage too high"); // Max 5%
         require(_depositDeadline > 0 && _refundDelay > 0 && _liquidityDeadline > 0, "Invalid deadlines");
+        // Ensure deployment on BNB Chain (chainId 56)
+        uint256 chainId;
+        assembly { chainId := chainid() }
+        require(chainId == 56, "Must deploy on BNB Chain");
         partyA = _partyA;
         partyB = _partyB;
         safeWallet = _safeWallet;
@@ -129,10 +141,10 @@ contract TokenLaunch is ReentrancyGuard {
         liquidityDeadline = _liquidityDeadline;
         deploymentTime = block.timestamp;
         state = LaunchState.Initialized;
-        emit StateChanged(state);
     }
 
-    // Deposit BNB
+    /// @notice Deposit BNB from either party
+    /// @dev Both parties must deposit within depositDeadline
     function deposit() external payable onlyParties atState(LaunchState.Initialized) whenNotPaused {
         require(block.timestamp <= deploymentTime + depositDeadline, "Deposit deadline passed");
         require(msg.value == depositAmount, "Incorrect deposit");
@@ -150,7 +162,8 @@ contract TokenLaunch is ReentrancyGuard {
         emit Deposited(msg.sender, msg.value);
     }
 
-    // Create token
+    /// @notice Create BEP-20 token
+    /// @dev Metadata stored for DEX compatibility; consider IPFS for gas savings
     function createToken(string memory name, string memory symbol, string memory _logoURI)
         external
         onlyParties
@@ -169,7 +182,8 @@ contract TokenLaunch is ReentrancyGuard {
         emit TokenCreated(tokenAddress, name, symbol, _logoURI);
     }
 
-    // Add liquidity
+    /// @notice Add liquidity to PancakeSwap V2
+    /// @dev Sends LP tokens to safeWallet; renounces token ownership
     function addLiquidity() external onlyParties atState(LaunchState.TokenCreated) nonReentrant whenNotPaused {
         require(block.timestamp <= tokenCreationTime + liquidityDeadline, "Liquidity deadline passed");
         require(IERC20(tokenAddress).balanceOf(address(this)) >= liquidityTokens, "Insufficient tokens");
@@ -197,7 +211,8 @@ contract TokenLaunch is ReentrancyGuard {
         emit RemainingTransferred(remainingTokens, remainingBNB);
     }
 
-    // Lock LP tokens
+    /// @notice Initiate LP token locking
+    /// @dev Safe must approve transfer to locker (e.g., Team Finance) via UI
     function lockLP(address lpToken, address locker, uint256 duration)
         external
         onlyParties
@@ -206,17 +221,16 @@ contract TokenLaunch is ReentrancyGuard {
     {
         require(locker != address(0), "Invalid locker");
         require(duration > 0, "Invalid duration");
-        // Safe must approve LP token transfer to locker via its UI (e.g., Team Finance)
         uint256 lpBalance = IERC20(lpToken).balanceOf(safeWallet);
         require(lpBalance > 0, "No LP tokens in Safe");
         require(IERC20(lpToken).allowance(safeWallet, locker) >= lpBalance, "Safe must approve locker");
-        // The transfer is executed by Safe's batch transaction outside this contract
+        emit LPLockInitiated(lpToken, locker, lpBalance, duration);
         state = LaunchState.LPLocked;
         emit StateChanged(state);
         emit LPLocked(locker, duration);
     }
 
-    // Refund
+    /// @notice Refund if one party doesn't deposit
     function refund() external onlyParties atState(LaunchState.Initialized) whenNotPaused {
         require(block.timestamp > deploymentTime + refundDelay, "Too early");
         if (msg.sender == partyA && !partyBDeposited) {
@@ -228,7 +242,7 @@ contract TokenLaunch is ReentrancyGuard {
         }
     }
 
-    // Reset if liquidity fails
+    /// @notice Reset to Deposited if liquidity fails
     function resetLiquidity() external onlyParties atState(LaunchState.TokenCreated) whenNotPaused {
         require(block.timestamp > tokenCreationTime + liquidityDeadline, "Too early");
         require(IERC20(tokenAddress).balanceOf(address(this)) >= totalSupply, "Tokens moved");
@@ -237,7 +251,7 @@ contract TokenLaunch is ReentrancyGuard {
         emit LiquidityReset();
     }
 
-    // Emergency withdraw
+    /// @notice Emergency withdraw tokens/BNB
     function emergencyWithdraw() external onlyParties whenNotPaused {
         require(state >= LaunchState.TokenCreated, "No assets to withdraw");
         uint256 tokenBalance = IERC20(tokenAddress).balanceOf(address(this));
@@ -247,7 +261,7 @@ contract TokenLaunch is ReentrancyGuard {
         emit EmergencyWithdrawn(bnbBalance, tokenBalance);
     }
 
-    // Pause contract
+    /// @notice Pause contract (Safe only)
     function pause() external {
         require(msg.sender == safeWallet, "Only Safe");
         require(!paused, "Already paused");
@@ -255,7 +269,7 @@ contract TokenLaunch is ReentrancyGuard {
         emit Paused();
     }
 
-    // Unpause contract
+    /// @notice Unpause contract (Safe only)
     function unpause() external {
         require(msg.sender == safeWallet, "Only Safe");
         require(paused, "Not paused");
