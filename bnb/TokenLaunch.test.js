@@ -12,6 +12,7 @@ describe("TokenLaunch", () => {
   const depositDeadline = 3600; // 1 hour
   const refundDelay = 86400; // 1 day
   const liquidityDeadline = 86400; // 1 day
+  const targetChainId = 56; // BNB Chain
 
   beforeEach(async () => {
     [partyA, partyB, safeWallet, lpLockerMock] = await ethers.getSigners();
@@ -37,19 +38,21 @@ describe("TokenLaunch", () => {
       slippageBps,
       depositDeadline,
       refundDelay,
-      liquidityDeadline
+      liquidityDeadline,
+      targetChainId
     );
   });
 
   it("Should deploy with correct parameters and emit ContractDeployed", async () => {
     expect(await tokenLaunch.partyA()).to.equal(partyA.address);
     expect(await tokenLaunch.depositAmount()).to.equal(depositAmount);
+    expect(await tokenLaunch.targetChainId()).to.equal(targetChainId);
     expect(await tokenLaunch.getLaunchState()).to.equal(0); // Initialized
     expect(await tokenLaunch.getStateName()).to.equal("Initialized");
     expect(await tokenLaunch.paused()).to.be.false;
     expect(await tokenLaunch.getPancakeRouter()).to.equal(pancakeRouterMock.address);
     await expect(tokenLaunch.deployTransaction).to.emit(tokenLaunch, "ContractDeployed")
-      .withArgs(partyA.address, partyB.address, await tokenLaunch.safeWallet(), pancakeRouterMock.address);
+      .withArgs(partyA.address, partyB.address, await tokenLaunch.safeWallet(), pancakeRouterMock.address, targetChainId);
   });
 
   it("Should allow deposits and transition state", async () => {
@@ -61,7 +64,7 @@ describe("TokenLaunch", () => {
     await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Party A deposited");
   });
 
-  it("Should create token and emit events", async () => {
+  it("Should create token with valid metadata and emit events", async () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     const tx = await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
@@ -75,17 +78,22 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.getStateName()).to.equal("TokenCreated");
     const [name, symbol, uri] = await tokenLaunch.getMetadata();
     expect(name).to.equal("GrokDog Coin");
+    expect(symbol).to.equal("GROKDOG");
     expect(uri).to.equal("https://logo.uri");
+    await expect(tokenLaunch.connect(partyA).createToken("", "GROKDOG", "https://logo.uri")).to.be.revertedWith("Name empty");
   });
 
-  it("Should update metadata URI", async () => {
+  it("Should update metadata", async () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
-    await expect(tokenLaunch.connect(safeWallet).setMetadataURI("https://new.logo.uri"))
-      .to.emit(tokenLaunch, "MetadataUpdated").withArgs("https://new.logo.uri");
-    const [, , uri] = await tokenLaunch.getMetadata();
+    await expect(tokenLaunch.connect(safeWallet).setMetadata("New Coin", "NEW", "https://new.logo.uri"))
+      .to.emit(tokenLaunch, "MetadataUpdated").withArgs("New Coin", "NEW", "https://new.logo.uri");
+    const [name, symbol, uri] = await tokenLaunch.getMetadata();
+    expect(name).to.equal("New Coin");
+    expect(symbol).to.equal("NEW");
     expect(uri).to.equal("https://new.logo.uri");
+    await expect(tokenLaunch.connect(safeWallet).setMetadata("", "NEW", "https://new.logo.uri")).to.be.revertedWith("Name empty");
   });
 
   it("Should add liquidity and transfer remaining", async () => {
