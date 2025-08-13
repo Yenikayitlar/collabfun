@@ -3,7 +3,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
 describe("TokenLaunch", () => {
-  let TokenLaunch, tokenLaunch, partyA, partyB, safeWallet, pancakeRouterMock, lpLocker;
+  let TokenLaunch, tokenLaunch, partyA, partyB, safeWallet, pancakeRouterMock, lpLockerMock;
   const depositAmount = ethers.utils.parseEther("0.24");
   const liquidityBNB = ethers.utils.parseEther("0.2");
   const liquidityTokens = ethers.utils.parseEther("100000000");
@@ -11,7 +11,7 @@ describe("TokenLaunch", () => {
   const slippageBps = 100; // 1%
 
   beforeEach(async () => {
-    [partyA, partyB, safeWallet, lpLocker] = await ethers.getSigners();
+    [partyA, partyB, safeWallet, lpLockerMock] = await ethers.getSigners();
 
     // Mock PancakeRouter
     const PancakeRouterMock = await ethers.getContractFactory("PancakeRouterMock");
@@ -79,10 +79,11 @@ describe("TokenLaunch", () => {
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
     await tokenLaunch.connect(partyA).addLiquidity();
-    // Mock Safe approval (not testable here)
-    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLocker.address, 365 * 24 * 3600))
+    // Mock Safe allowance (not testable on-chain, assume pre-approved)
+    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 365 * 24 * 3600))
       .to.emit(tokenLaunch, "LPLocked");
     expect(await tokenLaunch.getLaunchState()).to.equal(4); // LPLocked
+    expect(await tokenLaunch.getSafeAllowance(pancakeRouterMock.address, lpLockerMock.address)).to.be.greaterThan(0); // Mock test
   });
 
   it("Should refund if one party doesn't deposit", async () => {
@@ -104,7 +105,7 @@ describe("TokenLaunch", () => {
   });
 
   it("Should handle pause/unpause", async () => {
-    await expect(tokenLaunch.connect(partyA).pause()).to.emit(tokenLaunch, "Paused");
+    await expect(tokenLaunch.connect(safeWallet).pause()).to.emit(tokenLaunch, "Paused");
     await expect(tokenLaunch.connect(partyA).deposit({ value: depositAmount })).to.be.revertedWith("Contract paused");
     await expect(tokenLaunch.connect(safeWallet).unpause()).to.emit(tokenLaunch, "Unpaused");
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
@@ -121,7 +122,7 @@ describe("TokenLaunch", () => {
 
   it("Should revert on invalid actions", async () => {
     await expect(tokenLaunch.connect(partyA).createToken("Name", "Sym", "URI")).to.be.revertedWith("Invalid state");
-    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLocker.address, 1))
+    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 1))
       .to.be.revertedWith("Invalid state");
   });
 });
