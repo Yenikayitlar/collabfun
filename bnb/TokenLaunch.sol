@@ -5,6 +5,7 @@ import "@openzeppelin/contracts@5.0.0/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts@5.0.0/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts@5.0.0/access/Ownable.sol";
 import "@openzeppelin/contracts@5.0.0/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts@5.0.0/utils/introspection/IERC165.sol";
 
 // PancakeSwap V2 Router interface
 interface IPancakeRouter {
@@ -72,14 +73,16 @@ contract TokenLaunch is ReentrancyGuard {
     uint256 public tokenCreationTime;
 
     // Events
+    event ContractDeployed(address partyA, address partyB, address safeWallet, address pancakeRouter);
     event Deposited(address indexed party, uint256 amount);
     event TokenCreated(address indexed token, string name, string symbol, string logoURI);
+    event MetadataUpdated(string logoURI);
     event LiquidityAdded(uint256 tokenAmount, uint256 bnbAmount, uint256 liquidityReceived);
     event RemainingTransferred(uint256 tokenAmount, uint256 bnbAmount);
     event LPLockInitiated(address indexed lpToken, address indexed locker, uint256 amount, uint256 duration);
-    event LPLocked(address indexed locker, uint256 duration);
+    event LPLocked(address indexed lpToken, address indexed locker, uint256 amount, uint256 duration);
     event Refunded(address indexed party, uint256 amount);
-    event EmergencyWithdrawn(uint256 bnbAmount, uint256 tokenAmount);
+    event EmergencyWithdrawn(uint256 bnbBalance, uint256 tokenBalance);
     event LiquidityReset();
     event StateChanged(LaunchState state);
     event Paused();
@@ -103,7 +106,8 @@ contract TokenLaunch is ReentrancyGuard {
     /// @dev Formal invariant: totalSupply >= IERC20(tokenAddress).balanceOf(address(this))
     /// @dev Formal invariant: state transitions only forward (Initialized -> Deposited -> TokenCreated -> LiquidityAdded -> LPLocked)
     /// @dev Formal property: address(this).balance >= depositAmount if state == Deposited
-    /// @dev Formal property: safeWallet has 2/2 threshold (verified off-chain)
+    /// @dev Formal property: safeWallet holds LP tokens post-LiquidityAdded (IERC20(lpToken).balanceOf(safeWallet) > 0)
+    /// @dev Formal property: safeWallet supports IERC165 for compatibility
     constructor(
         address _partyA,
         address _partyB,
@@ -127,6 +131,8 @@ contract TokenLaunch is ReentrancyGuard {
         uint256 chainId;
         assembly { chainId := chainid() }
         require(chainId == 56, "Must deploy on BNB Chain");
+        // Verify safeWallet supports IERC165 (basic Safe compatibility)
+        require(IERC165(_safeWallet).supportsInterface(0x01ffc9a7), "SafeWallet must support IERC165");
         partyA = _partyA;
         partyB = _partyB;
         safeWallet = _safeWallet;
@@ -141,6 +147,7 @@ contract TokenLaunch is ReentrancyGuard {
         liquidityDeadline = _liquidityDeadline;
         deploymentTime = block.timestamp;
         state = LaunchState.Initialized;
+        emit ContractDeployed(_partyA, _partyB, _safeWallet, _pancakeRouter);
     }
 
     /// @notice Deposit BNB from either party
@@ -180,6 +187,14 @@ contract TokenLaunch is ReentrancyGuard {
         state = LaunchState.TokenCreated;
         emit StateChanged(state);
         emit TokenCreated(tokenAddress, name, symbol, _logoURI);
+    }
+
+    /// @notice Update metadata URI
+    /// @dev Restricted to safeWallet for trustlessness
+    function setMetadataURI(string memory _logoURI) external {
+        require(msg.sender == safeWallet, "Only Safe");
+        logoURI = _logoURI;
+        emit MetadataUpdated(_logoURI);
     }
 
     /// @notice Add liquidity to PancakeSwap V2
@@ -227,7 +242,7 @@ contract TokenLaunch is ReentrancyGuard {
         emit LPLockInitiated(lpToken, locker, lpBalance, duration);
         state = LaunchState.LPLocked;
         emit StateChanged(state);
-        emit LPLocked(locker, duration);
+        emit LPLocked(lpToken, locker, lpBalance, duration);
     }
 
     /// @notice Refund if one party doesn't deposit
@@ -305,6 +320,10 @@ contract TokenLaunch is ReentrancyGuard {
 
     function getSafeLPBalance(address lpToken) external view returns (uint256) {
         return IERC20(lpToken).balanceOf(safeWallet);
+    }
+
+    function getPancakeRouter() external view returns (address) {
+        return pancakeRouter;
     }
 
     receive() external payable {}
