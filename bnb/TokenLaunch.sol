@@ -195,12 +195,13 @@ contract TokenLaunch is ReentrancyGuard {
         atState(LaunchState.LiquidityAdded)
         whenNotPaused
     {
-        // Safe must approve LP token transfer to locker via its UI (e.g., Team Finance)
         require(locker != address(0), "Invalid locker");
         require(duration > 0, "Invalid duration");
+        // Safe must approve LP token transfer to locker via its UI (e.g., Team Finance)
         uint256 lpBalance = IERC20(lpToken).balanceOf(safeWallet);
         require(lpBalance > 0, "No LP tokens in Safe");
         require(IERC20(lpToken).allowance(safeWallet, locker) >= lpBalance, "Safe must approve locker");
+        // The transfer is executed by Safe's batch transaction outside this contract
         state = LaunchState.LPLocked;
         emit StateChanged(state);
         emit LPLocked(locker, duration);
@@ -238,13 +239,14 @@ contract TokenLaunch is ReentrancyGuard {
     }
 
     // Pause contract
-    function pause() external onlyParties {
+    function pause() external {
+        require(msg.sender == safeWallet, "Only Safe");
         require(!paused, "Already paused");
         paused = true;
         emit Paused();
     }
 
-    // Unpause contract (via Safe)
+    // Unpause contract
     function unpause() external {
         require(msg.sender == safeWallet, "Only Safe");
         require(paused, "Not paused");
@@ -263,6 +265,10 @@ contract TokenLaunch is ReentrancyGuard {
 
     function getMetadata() external view returns (string memory name, string memory symbol, string memory uri) {
         return (tokenName, tokenSymbol, logoURI);
+    }
+
+    function getSafeAllowance(address lpToken, address locker) external view returns (uint256) {
+        return IERC20(lpToken).allowance(safeWallet, locker);
     }
 
     receive() external payable {}
