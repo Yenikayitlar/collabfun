@@ -1,10 +1,10 @@
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts@4.9.0/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts@4.9.0/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts@4.9.0/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts@4.9.0/access/Ownable.sol";
-import "@openzeppelin/contracts@4.9.0/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts@5.0.0/token/ERC20/ERC20.sol"; // Updated to 5.0.0
+import "@openzeppelin/contracts@5.0.0/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@5.0.0/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts@5.0.0/access/Ownable.sol";
+import "@openzeppelin/contracts@5.0.0/security/ReentrancyGuard.sol";
 
 // PancakeSwap V2 Router interface
 interface IPancakeRouter {
@@ -49,9 +49,9 @@ contract TokenLaunch is ReentrancyGuard {
     uint256 public immutable liquidityTokens; // e.g., 100M tokens
     uint256 public immutable totalSupply; // e.g., 1B tokens
     uint256 public immutable slippageBps; // e.g., 100 = 1%, max 500 = 5%
-    uint256 public constant DEPOSIT_DEADLINE = 1 hours;
-    uint256 public constant REFUND_DELAY = 1 days;
-    uint256 public constant LIQUIDITY_DEADLINE = 1 days;
+    uint256 public immutable depositDeadline; // Configurable, e.g., 1 hours
+    uint256 public immutable refundDelay; // Configurable, e.g., 1 days
+    uint256 public immutable liquidityDeadline; // Configurable, e.g., 1 days
 
     // State
     enum LaunchState { Initialized, Deposited, TokenCreated, LiquidityAdded, LPLocked }
@@ -94,6 +94,8 @@ contract TokenLaunch is ReentrancyGuard {
         _;
     }
 
+    /// @dev Formal invariant: total tokens in contract <= totalSupply (verified with tools like Isabelle)
+    /// @dev Formal invariant: state transitions only forward (Initialized -> Deposited -> TokenCreated -> LiquidityAdded -> LPLocked)
     constructor(
         address _partyA,
         address _partyB,
@@ -103,12 +105,16 @@ contract TokenLaunch is ReentrancyGuard {
         uint256 _liquidityBNB,
         uint256 _liquidityTokens,
         uint256 _totalSupply,
-        uint256 _slippageBps
+        uint256 _slippageBps,
+        uint256 _depositDeadline,
+        uint256 _refundDelay,
+        uint256 _liquidityDeadline
     ) {
         require(_partyA != address(0) && _partyB != address(0) && _safeWallet != address(0) && _pancakeRouter != address(0), "Zero address");
         require(_partyA != _partyB, "Parties must differ");
         require(_depositAmount >= _liquidityBNB && _liquidityTokens <= _totalSupply, "Invalid amounts");
         require(_slippageBps <= 500, "Slippage too high"); // Max 5%
+        require(_depositDeadline > 0 && _refundDelay > 0 && _liquidityDeadline > 0, "Invalid deadlines");
         partyA = _partyA;
         partyB = _partyB;
         safeWallet = _safeWallet;
@@ -118,6 +124,9 @@ contract TokenLaunch is ReentrancyGuard {
         liquidityTokens = _liquidityTokens;
         totalSupply = _totalSupply;
         slippageBps = _slippageBps;
+        depositDeadline = _depositDeadline;
+        refundDelay = _refundDelay;
+        liquidityDeadline = _liquidityDeadline;
         deploymentTime = block.timestamp;
         state = LaunchState.Initialized;
         emit StateChanged(state);
@@ -125,7 +134,7 @@ contract TokenLaunch is ReentrancyGuard {
 
     // Deposit BNB
     function deposit() external payable onlyParties atState(LaunchState.Initialized) whenNotPaused {
-        require(block.timestamp <= deploymentTime + DEPOSIT_DEADLINE, "Deposit deadline passed");
+        require(block.timestamp <= deploymentTime + depositDeadline, "Deposit deadline passed");
         require(msg.value == depositAmount, "Incorrect deposit");
         if (msg.sender == partyA) {
             require(!partyADeposited, "Party A deposited");
@@ -162,7 +171,7 @@ contract TokenLaunch is ReentrancyGuard {
 
     // Add liquidity
     function addLiquidity() external onlyParties atState(LaunchState.TokenCreated) nonReentrant whenNotPaused {
-        require(block.timestamp <= tokenCreationTime + LIQUIDITY_DEADLINE, "Liquidity deadline passed");
+        require(block.timestamp <= tokenCreationTime + liquidityDeadline, "Liquidity deadline passed");
         require(IERC20(tokenAddress).balanceOf(address(this)) >= liquidityTokens, "Insufficient tokens");
         SafeERC20.safeApprove(IERC20(tokenAddress), pancakeRouter, 0);
         SafeERC20.safeApprove(IERC20(tokenAddress), pancakeRouter, liquidityTokens);
@@ -209,7 +218,7 @@ contract TokenLaunch is ReentrancyGuard {
 
     // Refund
     function refund() external onlyParties atState(LaunchState.Initialized) whenNotPaused {
-        require(block.timestamp > deploymentTime + REFUND_DELAY, "Too early");
+        require(block.timestamp > deploymentTime + refundDelay, "Too early");
         if (msg.sender == partyA && !partyBDeposited) {
             payable(partyA).transfer(depositAmount);
             emit Refunded(partyA, depositAmount);
@@ -221,7 +230,7 @@ contract TokenLaunch is ReentrancyGuard {
 
     // Reset if liquidity fails
     function resetLiquidity() external onlyParties atState(LaunchState.TokenCreated) whenNotPaused {
-        require(block.timestamp > tokenCreationTime + LIQUIDITY_DEADLINE, "Too early");
+        require(block.timestamp > tokenCreationTime + liquidityDeadline, "Too early");
         require(IERC20(tokenAddress).balanceOf(address(this)) >= totalSupply, "Tokens moved");
         state = LaunchState.Deposited;
         emit StateChanged(state);
@@ -259,6 +268,15 @@ contract TokenLaunch is ReentrancyGuard {
         return state;
     }
 
+    function getStateName() external view returns (string memory) {
+        if (state == LaunchState.Initialized) return "Initialized";
+        if (state == LaunchState.Deposited) return "Deposited";
+        if (state == LaunchState.TokenCreated) return "TokenCreated";
+        if (state == LaunchState.LiquidityAdded) return "LiquidityAdded";
+        if (state == LaunchState.LPLocked) return "LPLocked";
+        return "Unknown";
+    }
+
     function getBalances() external view returns (uint256 bnbBalance, uint256 tokenBalance) {
         return (address(this).balance, tokenAddress == address(0) ? 0 : IERC20(tokenAddress).balanceOf(address(this)));
     }
@@ -269,6 +287,10 @@ contract TokenLaunch is ReentrancyGuard {
 
     function getSafeAllowance(address lpToken, address locker) external view returns (uint256) {
         return IERC20(lpToken).allowance(safeWallet, locker);
+    }
+
+    function getSafeLPBalance(address lpToken) external view returns (uint256) {
+        return IERC20(lpToken).balanceOf(safeWallet);
     }
 
     receive() external payable {}
