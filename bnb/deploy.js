@@ -6,6 +6,7 @@ async function main() {
   console.log("Deploying from:", deployer.address);
 
   // Deploy Gnosis Safe (2/2) at safe.global first with partyA and partyB as owners, threshold 2/2
+  // Ensure deployment on BNB Chain (chainId 56) for PancakeSwap V2 compatibility
   const partyA = "0xYourPartyAAddress";
   const partyB = "0xYourPartyBAddress";
   const safeWallet = "0xYourGnosisSafeAddress"; // Pre-deployed 2/2 Safe
