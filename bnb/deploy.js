@@ -6,7 +6,7 @@ async function main() {
   console.log("Deploying from:", deployer.address);
 
   // Deploy Gnosis Safe (2/2) at safe.global first with partyA and partyB as owners, threshold 2/2
-  // Ensure safeWallet supports IERC165 (0x01ffc9a7) and is deployed on BNB Chain (chainId 56)
+  // Ensure safeWallet supports IERC165 (0x01ffc9a7) and is deployed on BNB Chain (chainId 56 by default)
   const partyA = "0xYourPartyAAddress";
   const partyB = "0xYourPartyBAddress";
   const safeWallet = "0xYourGnosisSafeAddress"; // Pre-deployed 2/2 Safe
@@ -19,6 +19,7 @@ async function main() {
   const depositDeadline = 3600; // 1 hour in seconds
   const refundDelay = 86400; // 1 day in seconds
   const liquidityDeadline = 86400; // 1 day in seconds
+  const targetChainId = 56; // BNB Chain (configurable for testnets, e.g., 97)
 
   const TokenLaunch = await hre.ethers.getContractFactory("TokenLaunch");
   const tokenLaunch = await TokenLaunch.deploy(
@@ -33,7 +34,8 @@ async function main() {
     slippageBps,
     depositDeadline,
     refundDelay,
-    liquidityDeadline
+    liquidityDeadline,
+    targetChainId
   );
 
   await tokenLaunch.deployed();
@@ -42,7 +44,21 @@ async function main() {
   // Verify on BscScan
   await hre.run("verify:verify", {
     address: tokenLaunch.address,
-    constructorArguments: [partyA, partyB, safeWallet, pancakeRouter, depositAmount, liquidityBNB, liquidityTokens, totalSupply, slippageBps, depositDeadline, refundDelay, liquidityDeadline],
+    constructorArguments: [
+      partyA,
+      partyB,
+      safeWallet,
+      pancakeRouter,
+      depositAmount,
+      liquidityBNB,
+      liquidityTokens,
+      totalSupply,
+      slippageBps,
+      depositDeadline,
+      refundDelay,
+      liquidityDeadline,
+      targetChainId
+    ],
   });
 }
 
