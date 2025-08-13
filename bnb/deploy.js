@@ -15,6 +15,9 @@ async function main() {
   const liquidityTokens = hre.ethers.utils.parseEther("100000000");
   const totalSupply = hre.ethers.utils.parseEther("1000000000");
   const slippageBps = 100; // 1%
+  const depositDeadline = 3600; // 1 hour in seconds
+  const refundDelay = 86400; // 1 day in seconds
+  const liquidityDeadline = 86400; // 1 day in seconds
 
   const TokenLaunch = await hre.ethers.getContractFactory("TokenLaunch");
   const tokenLaunch = await TokenLaunch.deploy(
@@ -26,7 +29,10 @@ async function main() {
     liquidityBNB,
     liquidityTokens,
     totalSupply,
-    slippageBps
+    slippageBps,
+    depositDeadline,
+    refundDelay,
+    liquidityDeadline
   );
 
   await tokenLaunch.deployed();
@@ -35,7 +41,7 @@ async function main() {
   // Verify on BscScan
   await hre.run("verify:verify", {
     address: tokenLaunch.address,
-    constructorArguments: [partyA, partyB, safeWallet, pancakeRouter, depositAmount, liquidityBNB, liquidityTokens, totalSupply, slippageBps],
+    constructorArguments: [partyA, partyB, safeWallet, pancakeRouter, depositAmount, liquidityBNB, liquidityTokens, totalSupply, slippageBps, depositDeadline, refundDelay, liquidityDeadline],
   });
 }
 
