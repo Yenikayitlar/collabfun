@@ -5,16 +5,16 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   console.log("Deploying from:", deployer.address);
 
-  // Replace with actual addresses
+  // Setup Gnosis Safe (2/2) at safe.global first
   const partyA = "0xYourPartyAAddress";
   const partyB = "0xYourPartyBAddress";
-  const safeWallet = "0xYourGnosisSafeAddress"; // Deploy Safe first via safe.global
-  const pancakeRouter = "0x10ED43C718714eb63d5aA57B78B54704E256024E"; // Mainnet V2
-  const lpLocker = "0xTeamFinanceLockerAddress"; // Or 0x0 if not using
+  const safeWallet = "0xYourGnosisSafeAddress"; // Pre-deployed 2/2 Safe
+  const pancakeRouter = "0x10ED43C718714eb63d5aA57B78B54704E256024E"; // BNB Chain mainnet V2
   const depositAmount = hre.ethers.utils.parseEther("0.24");
   const liquidityBNB = hre.ethers.utils.parseEther("0.2");
   const liquidityTokens = hre.ethers.utils.parseEther("100000000");
   const totalSupply = hre.ethers.utils.parseEther("1000000000");
+  const slippageBps = 100; // 1%
 
   const TokenLaunch = await hre.ethers.getContractFactory("TokenLaunch");
   const tokenLaunch = await TokenLaunch.deploy(
@@ -22,11 +22,11 @@ async function main() {
     partyB,
     safeWallet,
     pancakeRouter,
-    lpLocker,
     depositAmount,
     liquidityBNB,
     liquidityTokens,
-    totalSupply
+    totalSupply,
+    slippageBps
   );
 
   await tokenLaunch.deployed();
@@ -35,7 +35,7 @@ async function main() {
   // Verify on BscScan
   await hre.run("verify:verify", {
     address: tokenLaunch.address,
-    constructorArguments: [partyA, partyB, safeWallet, pancakeRouter, lpLocker, depositAmount, liquidityBNB, liquidityTokens, totalSupply],
+    constructorArguments: [partyA, partyB, safeWallet, pancakeRouter, depositAmount, liquidityBNB, liquidityTokens, totalSupply, slippageBps],
   });
 }
 
