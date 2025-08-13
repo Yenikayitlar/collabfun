@@ -38,9 +38,10 @@ contract Memecoin is ERC20, Ownable {
 }
 
 /// @title TokenLaunch - Trustless memecoin launch contract for BNB Chain
-/// @dev Deploy on BNB Chain (chainId 56). Compatible with PancakeSwap V2; consider V3 for concentrated liquidity in future.
+/// @dev Deploy on BNB Chain (chainId 56 by default). Compatible with PancakeSwap V2; consider V3 for concentrated liquidity in future.
 /// @dev Use UUPS proxy for upgradeability if needed (not implemented here).
 /// @dev Metadata stored on-chain; consider IPFS for gas savings in future versions.
+/// @custom:version 1.0.0
 /// @custom:security-contact security@x.ai
 contract TokenLaunch is ReentrancyGuard {
     // Immutable parties and configs
@@ -48,6 +49,7 @@ contract TokenLaunch is ReentrancyGuard {
     address public immutable partyB;
     address public immutable safeWallet; // Pre-deployed Gnosis Safe (2/2 threshold)
     address public immutable pancakeRouter;
+    uint256 public immutable targetChainId; // Configurable chain ID, default 56 (BNB Chain)
     
     // Configurable parameters
     uint256 public immutable depositAmount; // e.g., 0.24 BNB
@@ -73,10 +75,10 @@ contract TokenLaunch is ReentrancyGuard {
     uint256 public tokenCreationTime;
 
     // Events
-    event ContractDeployed(address partyA, address partyB, address safeWallet, address pancakeRouter);
+    event ContractDeployed(address partyA, address partyB, address safeWallet, address pancakeRouter, uint256 targetChainId);
     event Deposited(address indexed party, uint256 amount);
     event TokenCreated(address indexed token, string name, string symbol, string logoURI);
-    event MetadataUpdated(string logoURI);
+    event MetadataUpdated(string name, string symbol, string logoURI);
     event LiquidityAdded(uint256 tokenAmount, uint256 bnbAmount, uint256 liquidityReceived);
     event RemainingTransferred(uint256 tokenAmount, uint256 bnbAmount);
     event LPLockInitiated(address indexed lpToken, address indexed locker, uint256 amount, uint256 duration);
@@ -108,6 +110,7 @@ contract TokenLaunch is ReentrancyGuard {
     /// @dev Formal property: address(this).balance >= depositAmount if state == Deposited
     /// @dev Formal property: safeWallet holds LP tokens post-LiquidityAdded (IERC20(lpToken).balanceOf(safeWallet) > 0)
     /// @dev Formal property: safeWallet supports IERC165 for compatibility
+    /// @dev Formal property: tokenName, tokenSymbol, logoURI are non-empty post-createToken
     constructor(
         address _partyA,
         address _partyB,
@@ -120,23 +123,25 @@ contract TokenLaunch is ReentrancyGuard {
         uint256 _slippageBps,
         uint256 _depositDeadline,
         uint256 _refundDelay,
-        uint256 _liquidityDeadline
+        uint256 _liquidityDeadline,
+        uint256 _targetChainId
     ) {
         require(_partyA != address(0) && _partyB != address(0) && _safeWallet != address(0) && _pancakeRouter != address(0), "Zero address");
         require(_partyA != _partyB, "Parties must differ");
         require(_depositAmount >= _liquidityBNB && _liquidityTokens <= _totalSupply, "Invalid amounts");
         require(_slippageBps <= 500, "Slippage too high"); // Max 5%
         require(_depositDeadline > 0 && _refundDelay > 0 && _liquidityDeadline > 0, "Invalid deadlines");
-        // Ensure deployment on BNB Chain (chainId 56)
+        // Ensure deployment on target chain (default 56 for BNB Chain)
         uint256 chainId;
         assembly { chainId := chainid() }
-        require(chainId == 56, "Must deploy on BNB Chain");
+        require(chainId == _targetChainId, "Invalid chain");
         // Verify safeWallet supports IERC165 (basic Safe compatibility)
         require(IERC165(_safeWallet).supportsInterface(0x01ffc9a7), "SafeWallet must support IERC165");
         partyA = _partyA;
         partyB = _partyB;
         safeWallet = _safeWallet;
         pancakeRouter = _pancakeRouter;
+        targetChainId = _targetChainId;
         depositAmount = _depositAmount;
         liquidityBNB = _liquidityBNB;
         liquidityTokens = _liquidityTokens;
@@ -147,7 +152,7 @@ contract TokenLaunch is ReentrancyGuard {
         liquidityDeadline = _liquidityDeadline;
         deploymentTime = block.timestamp;
         state = LaunchState.Initialized;
-        emit ContractDeployed(_partyA, _partyB, _safeWallet, _pancakeRouter);
+        emit ContractDeployed(_partyA, _partyB, _safeWallet, _pancakeRouter, _targetChainId);
     }
 
     /// @notice Deposit BNB from either party
@@ -178,6 +183,9 @@ contract TokenLaunch is ReentrancyGuard {
         whenNotPaused
     {
         require(tokenAddress == address(0), "Token created");
+        require(bytes(name).length > 0, "Name empty");
+        require(bytes(symbol).length > 0, "Symbol empty");
+        require(bytes(_logoURI).length > 0, "Logo URI empty");
         Memecoin token = new Memecoin(name, symbol, totalSupply);
         tokenAddress = address(token);
         tokenName = name;
@@ -189,12 +197,17 @@ contract TokenLaunch is ReentrancyGuard {
         emit TokenCreated(tokenAddress, name, symbol, _logoURI);
     }
 
-    /// @notice Update metadata URI
+    /// @notice Update metadata
     /// @dev Restricted to safeWallet for trustlessness
-    function setMetadataURI(string memory _logoURI) external {
+    function setMetadata(string memory name, string memory symbol, string memory _logoURI) external {
         require(msg.sender == safeWallet, "Only Safe");
+        require(bytes(name).length > 0, "Name empty");
+        require(bytes(symbol).length > 0, "Symbol empty");
+        require(bytes(_logoURI).length > 0, "Logo URI empty");
+        tokenName = name;
+        tokenSymbol = symbol;
         logoURI = _logoURI;
-        emit MetadataUpdated(_logoURI);
+        emit MetadataUpdated(name, symbol, _logoURI);
     }
 
     /// @notice Add liquidity to PancakeSwap V2
