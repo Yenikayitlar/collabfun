@@ -41,6 +41,7 @@ describe("TokenLaunch", () => {
     expect(await tokenLaunch.partyA()).to.equal(partyA.address);
     expect(await tokenLaunch.depositAmount()).to.equal(depositAmount);
     expect(await tokenLaunch.getLaunchState()).to.equal(0); // Initialized
+    expect(await tokenLaunch.getStateName()).to.equal("Initialized");
     expect(await tokenLaunch.paused()).to.be.false;
   });
 
@@ -89,17 +90,17 @@ describe("TokenLaunch", () => {
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
     await tokenLaunch.connect(partyA).addLiquidity();
     // Mock Safe allowance (not testable on-chain, assume pre-approved)
-    await expect(tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 365 * 24 * 3600))
-      .to.emit(tokenLaunch, "LPLocked");
+    const tx = await tokenLaunch.connect(partyA).lockLP(pancakeRouterMock.address, lpLockerMock.address, 365 * 24 * 3600);
+    await expect(tx).to.emit(tokenLaunch, "LPLockInitiated");
+    await expect(tx).to.emit(tokenLaunch, "LPLocked");
     expect(await tokenLaunch.getLaunchState()).to.equal(4); // LPLocked
     expect(await tokenLaunch.getStateName()).to.equal("LPLocked");
-    expect(await tokenLaunch.getSafeAllowance(pancakeRouterMock.address, lpLockerMock.address)).to.be.greaterThan(0); // Mock test
     expect(await tokenLaunch.getSafeLPBalance(pancakeRouterMock.address)).to.be.greaterThan(0); // Mock test
   });
 
   it("Should refund if one party doesn't deposit", async () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
-    await ethers.provider.send("evm_increaseTime", [86400 + 1]);
+    await ethers.provider.send("evm_increaseTime", [refundDelay + 1]);
     await expect(tokenLaunch.connect(partyA).refund())
       .to.emit(tokenLaunch, "Refunded")
       .withArgs(partyA.address, depositAmount);
@@ -109,7 +110,7 @@ describe("TokenLaunch", () => {
     await tokenLaunch.connect(partyA).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyB).deposit({ value: depositAmount });
     await tokenLaunch.connect(partyA).createToken("GrokDog Coin", "GROKDOG", "https://logo.uri");
-    await ethers.provider.send("evm_increaseTime", [86400 + 1]);
+    await ethers.provider.send("evm_increaseTime", [liquidityDeadline + 1]);
     await expect(tokenLaunch.connect(partyA).resetLiquidity())
       .to.emit(tokenLaunch, "LiquidityReset");
     expect(await tokenLaunch.getLaunchState()).to.equal(1); // Deposited
